@@ -61,6 +61,8 @@ docker compose down -v
 
 A successful `scripts/e2e.sh` exits with code `0` and exercises: register rider + driver, deposit, pay (capture code), driver verifies code, idempotent re-verification, insufficient funds (400), self-transfer guard (422), validation (400).
 
+_Validated end-to-end on 2026-05-01 via `scripts/e2e.sh` (exit code 0)._
+
 ### Per-service local dev
 
 ```bash
