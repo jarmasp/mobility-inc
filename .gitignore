@@ -1,0 +1,7 @@
+# Orchestration state (resumable across sessions, kept local)
+.gsd/
+
+# OS
+.DS_Store
+
+.qodo
