@@ -1,0 +1,6 @@
+*.test
+*_test.go
+.git
+.gitignore
+coverage.out
+bin/
