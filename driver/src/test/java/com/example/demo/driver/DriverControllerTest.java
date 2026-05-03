@@ -3,11 +3,13 @@ package com.example.demo.driver;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.example.demo.config.SecurityConfig;
 import com.example.demo.config.GlobalExceptionHandler;
 import com.example.demo.driver.client.PaymentsClient.TransactionDto;
 import com.example.demo.driver.dto.CreateDriverRequest;
@@ -20,17 +22,14 @@ import java.time.Instant;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.mock.mockito.MockBean;
-import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
-import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.web.servlet.MockMvc;
 
 @WebMvcTest(DriverController.class)
-@Import({GlobalExceptionHandler.class, DriverControllerTest.TestSecurityConfig.class})
+@Import({GlobalExceptionHandler.class, SecurityConfig.class})
 class DriverControllerTest {
 
     @Autowired
@@ -38,6 +37,9 @@ class DriverControllerTest {
 
     @MockBean
     private DriverService driverService;
+
+    @MockBean
+    private JwtDecoder jwtDecoder;
 
     @Test
     void createDriverShouldReturn201() throws Exception {
@@ -48,9 +50,10 @@ class DriverControllerTest {
                 BigDecimal.valueOf(100),
                 Instant.parse("2026-01-01T00:00:00Z")
         );
-        when(driverService.register(any(CreateDriverRequest.class))).thenReturn(response);
+        when(driverService.register(eq("app-user-id"), any(CreateDriverRequest.class))).thenReturn(response);
 
         mockMvc.perform(post("/drivers")
+                        .with(jwt().jwt(jwt -> jwt.claim("app_user_id", "app-user-id")))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"name":"Alice","email":"alice@example.com"}
@@ -63,6 +66,7 @@ class DriverControllerTest {
     @Test
     void createDriverShouldReturn400ForInvalidBody() throws Exception {
         mockMvc.perform(post("/drivers")
+                        .with(jwt().jwt(jwt -> jwt.claim("app_user_id", "app-user-id")))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"name":"","email":"bad-email"}
@@ -82,7 +86,8 @@ class DriverControllerTest {
         );
         when(driverService.findById(response.id())).thenReturn(response);
 
-        mockMvc.perform(get("/drivers/{id}", response.id()))
+        mockMvc.perform(get("/drivers/{id}", response.id())
+                        .with(jwt().jwt(jwt -> jwt.claim("app_user_id", "app-user-id"))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.email").value("alice@example.com"));
     }
@@ -91,7 +96,8 @@ class DriverControllerTest {
     void getDriverShouldReturn404() throws Exception {
         when(driverService.findById("missing")).thenThrow(new NotFoundException("Driver not found"));
 
-        mockMvc.perform(get("/drivers/missing"))
+        mockMvc.perform(get("/drivers/missing")
+                        .with(jwt().jwt(jwt -> jwt.claim("app_user_id", "app-user-id"))))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error").value("Driver not found"));
     }
@@ -105,6 +111,7 @@ class DriverControllerTest {
         when(driverService.withdraw(eq("driver-id"), eq(BigDecimal.valueOf(20)))).thenReturn(result);
 
         mockMvc.perform(post("/drivers/{id}/withdraw", "driver-id")
+                        .with(jwt().jwt(jwt -> jwt.claim("app_user_id", "app-user-id")))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"amount":20}
@@ -120,6 +127,7 @@ class DriverControllerTest {
                 .thenThrow(new InsufficientFundsException("Insufficient funds"));
 
         mockMvc.perform(post("/drivers/{id}/withdraw", "driver-id")
+                        .with(jwt().jwt(jwt -> jwt.claim("app_user_id", "app-user-id")))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"amount":20}
@@ -134,6 +142,7 @@ class DriverControllerTest {
                 .thenThrow(new NotFoundException("Driver not found"));
 
         mockMvc.perform(post("/drivers/{id}/withdraw", "missing")
+                        .with(jwt().jwt(jwt -> jwt.claim("app_user_id", "app-user-id")))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"amount":20}
@@ -148,6 +157,7 @@ class DriverControllerTest {
                 .thenThrow(new UpstreamException("Payments service unavailable"));
 
         mockMvc.perform(post("/drivers/{id}/withdraw", "driver-id")
+                        .with(jwt().jwt(jwt -> jwt.claim("app_user_id", "app-user-id")))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"amount":20}
@@ -170,7 +180,8 @@ class DriverControllerTest {
         );
         when(driverService.verifyTransactionCode("driver-id", "code-1")).thenReturn(dto);
 
-        mockMvc.perform(get("/drivers/{id}/transactions/{code}", "driver-id", "code-1"))
+        mockMvc.perform(get("/drivers/{id}/transactions/{code}", "driver-id", "code-1")
+                        .with(jwt().jwt(jwt -> jwt.claim("app_user_id", "app-user-id"))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("COMPLETED"))
                 .andExpect(jsonPath("$.receiverId").value("driver-id"));
@@ -181,7 +192,8 @@ class DriverControllerTest {
         when(driverService.verifyTransactionCode("driver-id", "bad-code"))
                 .thenThrow(new ForbiddenException("Code does not belong to this driver"));
 
-        mockMvc.perform(get("/drivers/{id}/transactions/{code}", "driver-id", "bad-code"))
+        mockMvc.perform(get("/drivers/{id}/transactions/{code}", "driver-id", "bad-code")
+                        .with(jwt().jwt(jwt -> jwt.claim("app_user_id", "app-user-id"))))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.error").value("Code does not belong to this driver"));
     }
@@ -191,7 +203,8 @@ class DriverControllerTest {
         when(driverService.verifyTransactionCode("driver-id", "missing-code"))
                 .thenThrow(new NotFoundException("Transaction not found"));
 
-        mockMvc.perform(get("/drivers/{id}/transactions/{code}", "driver-id", "missing-code"))
+        mockMvc.perform(get("/drivers/{id}/transactions/{code}", "driver-id", "missing-code")
+                        .with(jwt().jwt(jwt -> jwt.claim("app_user_id", "app-user-id"))))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error").value("Transaction not found"));
     }
@@ -201,18 +214,15 @@ class DriverControllerTest {
         when(driverService.verifyTransactionCode("driver-id", "code-1"))
                 .thenThrow(new UpstreamException("Payments service unavailable"));
 
-        mockMvc.perform(get("/drivers/{id}/transactions/{code}", "driver-id", "code-1"))
+        mockMvc.perform(get("/drivers/{id}/transactions/{code}", "driver-id", "code-1")
+                        .with(jwt().jwt(jwt -> jwt.claim("app_user_id", "app-user-id"))))
                 .andExpect(status().isBadGateway())
                 .andExpect(jsonPath("$.error").value("Payments service unavailable"));
     }
 
-    @TestConfiguration
-    static class TestSecurityConfig {
-        @Bean
-        SecurityFilterChain testSecurityFilterChain(HttpSecurity http) throws Exception {
-            return http.csrf(csrf -> csrf.disable())
-                    .authorizeHttpRequests(auth -> auth.anyRequest().permitAll())
-                    .build();
-        }
+    @Test
+    void protectedEndpointsShouldReturn401WithoutToken() throws Exception {
+        mockMvc.perform(get("/drivers/driver-id"))
+                .andExpect(status().isUnauthorized());
     }
 }

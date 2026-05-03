@@ -4,21 +4,18 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
-	"time"
 
-	"github.com/google/uuid"
-	"github.com/jarmasp/mobility-inc/internal/code"
+	"github.com/jarmasp/mobility-inc/internal/service"
 	"github.com/jarmasp/mobility-inc/internal/store"
 	"github.com/jarmasp/mobility-inc/internal/transaction"
-	"github.com/jarmasp/mobility-inc/internal/validate"
 )
 
 type TransactionsHandler struct {
-	store *store.Store
+	service *service.TransactionsService
 }
 
-func NewTransactionsHandler(store *store.Store) *TransactionsHandler {
-	return &TransactionsHandler{store: store}
+func NewTransactionsHandler(store store.TransactionStore) *TransactionsHandler {
+	return &TransactionsHandler{service: service.NewTransactionsService(store)}
 }
 
 func (h *TransactionsHandler) CreateTransaction(w http.ResponseWriter, r *http.Request) {
@@ -29,57 +26,30 @@ func (h *TransactionsHandler) CreateTransaction(w http.ResponseWriter, r *http.R
 	}
 
 	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
-	if idempotencyKey != "" {
-		if tx, ok := h.store.GetByIdempotencyKey(idempotencyKey); ok {
-			writeJSON(w, http.StatusCreated, tx)
-			return
+	tx, serviceErr := h.service.CreateTransaction(r.Context(), req, idempotencyKey)
+	if serviceErr != nil {
+		status := http.StatusBadRequest
+		if serviceErr.Kind == service.ErrorKindSelfTransfer {
+			status = http.StatusUnprocessableEntity
 		}
-	}
-
-	status, err := validate.ValidateCreateTransaction(req)
-	if err != nil {
-		writeError(w, status, err.Error())
+		if serviceErr.Kind == service.ErrorKindUpstream {
+			status = http.StatusInternalServerError
+		}
+		writeError(w, status, serviceErr.Message)
 		return
 	}
 
-	var codeValue *string
-	if req.Type == transaction.TypeTransfer {
-		generated := code.Generate()
-		codeValue = &generated
-	}
-
-	var receiverID *string
-	if req.Type == transaction.TypeTransfer && req.ReceiverID != nil {
-		trimmed := strings.TrimSpace(*req.ReceiverID)
-		receiverID = &trimmed
-	}
-
-	tx := transaction.Transaction{
-		ID:             uuid.NewString(),
-		Type:           req.Type,
-		Status:         transaction.StatusCompleted,
-		Code:           codeValue,
-		SenderID:       strings.TrimSpace(req.SenderID),
-		ReceiverID:     receiverID,
-		Amount:         req.Amount,
-		CreatedAt:      time.Now().UTC(),
-		IdempotencyKey: idempotencyKey,
-	}
-
-	h.store.Save(tx)
 	writeJSON(w, http.StatusCreated, tx)
 }
 
 func (h *TransactionsHandler) GetTransactionByCode(w http.ResponseWriter, r *http.Request) {
-	codeParam := strings.TrimSpace(r.PathValue("code"))
-	if codeParam == "" {
-		writeError(w, http.StatusNotFound, "Transaction not found")
-		return
-	}
-
-	tx, ok := h.store.GetByCode(codeParam)
-	if !ok {
-		writeError(w, http.StatusNotFound, "Transaction not found")
+	tx, serviceErr := h.service.GetTransactionByCode(r.Context(), r.PathValue("code"))
+	if serviceErr != nil {
+		status := http.StatusNotFound
+		if serviceErr.Kind == service.ErrorKindUpstream {
+			status = http.StatusInternalServerError
+		}
+		writeError(w, status, serviceErr.Message)
 		return
 	}
 

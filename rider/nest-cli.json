@@ -3,6 +3,16 @@
   "collection": "@nestjs/schematics",
   "sourceRoot": "src",
   "compilerOptions": {
-    "deleteOutDir": true
+    "deleteOutDir": true,
+    "assets": [
+      {
+        "include": "clients/proto/**/*.proto",
+        "outDir": "dist"
+      },
+      {
+        "include": "notifications/templates/**/*",
+        "outDir": "dist"
+      }
+    ]
   }
 }

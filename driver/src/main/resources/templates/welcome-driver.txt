@@ -1,0 +1,4 @@
+Welcome to Mobility Inc, {{name}}!
+
+Your driver profile is active.
+Driver ID: {{driverId}}

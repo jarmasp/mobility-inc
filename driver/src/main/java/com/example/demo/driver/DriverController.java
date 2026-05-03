@@ -4,6 +4,8 @@ import com.example.demo.driver.client.PaymentsClient.TransactionDto;
 import com.example.demo.driver.dto.CreateDriverRequest;
 import com.example.demo.driver.dto.WithdrawRequest;
 import jakarta.validation.Valid;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -24,8 +26,15 @@ public class DriverController {
     }
 
     @PostMapping
-    public ResponseEntity<Driver> createDriver(@Valid @RequestBody CreateDriverRequest request) {
-        Driver driver = driverService.register(request);
+    public ResponseEntity<Driver> createDriver(
+            @AuthenticationPrincipal Jwt jwt,
+            @Valid @RequestBody CreateDriverRequest request
+    ) {
+        String appUserId = jwt != null ? jwt.getClaimAsString("app_user_id") : null;
+        if (appUserId == null || appUserId.isBlank()) {
+            throw new IllegalArgumentException("Token missing app_user_id");
+        }
+        Driver driver = driverService.register(appUserId, request);
         return ResponseEntity.status(HttpStatus.CREATED).body(driver);
     }
 

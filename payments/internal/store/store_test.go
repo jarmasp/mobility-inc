@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -27,19 +28,30 @@ func TestStoreSaveAndLookup(t *testing.T) {
 		IdempotencyKey: "idem-1",
 	}
 
-	s.Save(tx)
+	if err := s.Save(context.Background(), tx); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
 
-	gotByID, ok := s.GetByID(tx.ID)
+	gotByID, ok, err := s.GetByID(context.Background(), tx.ID)
+	if err != nil {
+		t.Fatalf("GetByID returned error: %v", err)
+	}
 	if !ok || gotByID.ID != tx.ID {
 		t.Fatalf("GetByID failed: got %#v, ok=%v", gotByID, ok)
 	}
 
-	gotByCode, ok := s.GetByCode(codeValue)
+	gotByCode, ok, err := s.GetByCode(context.Background(), codeValue)
+	if err != nil {
+		t.Fatalf("GetByCode returned error: %v", err)
+	}
 	if !ok || gotByCode.ID != tx.ID {
 		t.Fatalf("GetByCode failed: got %#v, ok=%v", gotByCode, ok)
 	}
 
-	gotByIdempotencyKey, ok := s.GetByIdempotencyKey("idem-1")
+	gotByIdempotencyKey, ok, err := s.GetByIdempotencyKey(context.Background(), "idem-1")
+	if err != nil {
+		t.Fatalf("GetByIdempotencyKey returned error: %v", err)
+	}
 	if !ok || gotByIdempotencyKey.ID != tx.ID {
 		t.Fatalf("GetByIdempotencyKey failed: got %#v, ok=%v", gotByIdempotencyKey, ok)
 	}
@@ -66,14 +78,18 @@ func TestStoreParallelWrites(t *testing.T) {
 				Amount:    float64(i + 1),
 				CreatedAt: time.Now().UTC(),
 			}
-			s.Save(tx)
+			if err := s.Save(context.Background(), tx); err != nil {
+				t.Errorf("Save failed: %v", err)
+			}
 		}()
 	}
 	wg.Wait()
 
 	for i := range total {
 		id := fmt.Sprintf("00000000-0000-4000-8000-%012d", i)
-		if _, ok := s.GetByID(id); !ok {
+		if _, ok, err := s.GetByID(context.Background(), id); err != nil {
+			t.Fatalf("GetByID returned error: %v", err)
+		} else if !ok {
 			t.Fatalf("transaction %s not found after concurrent saves", id)
 		}
 	}

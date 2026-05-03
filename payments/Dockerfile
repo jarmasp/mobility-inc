@@ -1,4 +1,4 @@
-FROM golang:1.23-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 WORKDIR /app
 COPY go.mod go.sum ./
@@ -14,7 +14,7 @@ RUN apk add --no-cache curl
 WORKDIR /app
 COPY --from=builder /bin/payments /usr/local/bin/payments
 
-EXPOSE 8081
+EXPOSE 50051 8081
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD curl -fsS http://localhost:8081/health || exit 1
 
 CMD ["payments"]

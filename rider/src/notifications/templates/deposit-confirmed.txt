@@ -1,0 +1,4 @@
+Hi {{name}},
+
+Your deposit of ${{amount}} was confirmed.
+Current balance: ${{balance}}.

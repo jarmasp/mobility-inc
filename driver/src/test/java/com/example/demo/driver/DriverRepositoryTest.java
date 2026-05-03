@@ -6,11 +6,29 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
+import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase.Replace;
+import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.context.annotation.Import;
 
-class DriverRepositoryTest {
+@DataJpaTest
+@Import(DriverRepository.class)
+@AutoConfigureTestDatabase(replace = Replace.NONE)
+class DriverRepositoryTest extends PostgresIntegrationTest {
 
-    private final DriverRepository repository = new DriverRepository();
+    @Autowired
+    private DriverRepository repository;
+
+    @Autowired
+    private DriverJpaRepository driverJpaRepository;
+
+    @BeforeEach
+    void setUp() {
+        driverJpaRepository.deleteAll();
+    }
 
     @Test
     void saveAndFindByIdShouldReturnStoredDriver() {

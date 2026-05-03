@@ -1,0 +1,5 @@
+Hi {{name}},
+
+Your first successful claim was processed.
+Code: {{code}}
+Amount: {{amount}}

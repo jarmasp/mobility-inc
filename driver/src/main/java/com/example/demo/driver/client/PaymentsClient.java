@@ -1,30 +1,31 @@
 package com.example.demo.driver.client;
 
 import com.example.demo.driver.exception.UpstreamException;
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.example.payments.v1.CreateTransactionRequest;
+import com.example.payments.v1.GetTransactionByCodeRequest;
+import com.example.payments.v1.PaymentsServiceGrpc;
+import com.example.payments.v1.TransactionResponse;
+import io.grpc.ManagedChannel;
+import io.grpc.ManagedChannelBuilder;
+import io.grpc.Status;
+import io.grpc.StatusRuntimeException;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.Optional;
+import javax.annotation.PreDestroy;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.HttpClientErrorException;
-import org.springframework.web.client.RestTemplate;
-import org.springframework.web.client.RestClientException;
 
 @Component
 public class PaymentsClient {
 
-    private final RestTemplate restTemplate;
-    private final String paymentsUrl;
+    private final ManagedChannel channel;
+    private final PaymentsServiceGrpc.PaymentsServiceBlockingStub blockingStub;
 
-    public PaymentsClient(RestTemplate restTemplate, @Value("${payments.url}") String paymentsUrl) {
-        this.restTemplate = restTemplate;
-        this.paymentsUrl = paymentsUrl;
+    public PaymentsClient(@Value("${payments.grpc-url}") String paymentsGrpcUrl) {
+        this.channel = ManagedChannelBuilder.forTarget(paymentsGrpcUrl).usePlaintext().build();
+        this.blockingStub = PaymentsServiceGrpc.newBlockingStub(channel);
     }
 
     public TransactionDto createTransaction(
@@ -34,53 +35,58 @@ public class PaymentsClient {
             BigDecimal amount,
             String idempotencyKey
     ) {
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
-            headers.set("Idempotency-Key", idempotencyKey);
-        }
-
-        CreateTransactionRequest request = new CreateTransactionRequest(type, senderId, receiverId, amount);
-        HttpEntity<CreateTransactionRequest> entity = new HttpEntity<>(request, headers);
-
         try {
-            ResponseEntity<TransactionDto> response = restTemplate.exchange(
-                    paymentsUrl + "/transactions",
-                    HttpMethod.POST,
-                    entity,
-                    TransactionDto.class
+            TransactionResponse response = blockingStub.createTransaction(
+                    CreateTransactionRequest.newBuilder()
+                            .setType(type)
+                            .setSenderId(senderId != null ? senderId : "")
+                            .setReceiverId(receiverId != null ? receiverId : "")
+                            .setAmount(amount.toPlainString())
+                            .setIdempotencyKey(idempotencyKey != null ? idempotencyKey : "")
+                            .build()
             );
-            return response.getBody();
-        } catch (RestClientException exception) {
+            return toDto(response);
+        } catch (StatusRuntimeException exception) {
             throw new UpstreamException("Payments service unavailable");
         }
     }
 
     public Optional<TransactionDto> getTransactionByCode(String code) {
         try {
-            ResponseEntity<TransactionDto> response = restTemplate.exchange(
-                    paymentsUrl + "/transactions/code/" + code,
-                    HttpMethod.GET,
-                    HttpEntity.EMPTY,
-                    TransactionDto.class
+            TransactionResponse response = blockingStub.getTransactionByCode(
+                    GetTransactionByCodeRequest.newBuilder().setCode(code).build()
             );
-            return Optional.ofNullable(response.getBody());
-        } catch (HttpClientErrorException.NotFound exception) {
-            return Optional.empty();
-        } catch (RestClientException exception) {
+            return Optional.of(toDto(response));
+        } catch (StatusRuntimeException exception) {
+            if (exception.getStatus().getCode() == Status.Code.NOT_FOUND) {
+                return Optional.empty();
+            }
             throw new UpstreamException("Payments service unavailable");
         }
     }
 
-    public record CreateTransactionRequest(
-            String type,
-            String senderId,
-            String receiverId,
-            BigDecimal amount
-    ) {
+    @PreDestroy
+    public void shutdown() {
+        channel.shutdownNow();
     }
 
-    @JsonIgnoreProperties(ignoreUnknown = true)
+    private TransactionDto toDto(TransactionResponse response) {
+        try {
+            return new TransactionDto(
+                    response.getTransactionId(),
+                    response.getType(),
+                    response.getStatus(),
+                    response.getCode().isBlank() ? null : response.getCode(),
+                    response.getSenderId().isBlank() ? null : response.getSenderId(),
+                    response.getReceiverId().isBlank() ? null : response.getReceiverId(),
+                    new BigDecimal(response.getAmount()),
+                    Instant.parse(response.getCreatedAt())
+            );
+        } catch (NumberFormatException | DateTimeParseException exception) {
+            throw new UpstreamException("Payments service unavailable");
+        }
+    }
+
     public record TransactionDto(
             String transactionId,
             String type,
