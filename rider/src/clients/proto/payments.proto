@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package payments.v1;
+
+service PaymentsService {
+  rpc CreateTransaction(CreateTransactionRequest) returns (TransactionResponse);
+  rpc GetTransactionByCode(GetTransactionByCodeRequest) returns (TransactionResponse);
+}
+
+message CreateTransactionRequest {
+  string type = 1;
+  string sender_id = 2;
+  string receiver_id = 3;
+  string amount = 4;
+  string idempotency_key = 5;
+}
+
+message GetTransactionByCodeRequest {
+  string code = 1;
+}
+
+message TransactionResponse {
+  string transaction_id = 1;
+  string type = 2;
+  string status = 3;
+  string code = 4;
+  string sender_id = 5;
+  string receiver_id = 6;
+  string amount = 7;
+  string created_at = 8;
+}

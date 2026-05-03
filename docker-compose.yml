@@ -1,11 +1,81 @@
 services:
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "8025:8025"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8025/api/v1/info >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    networks:
+      - mobility-net
+
+  postgres-payments:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: payments
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${MOBILITY_DB_PASSWORD:?MOBILITY_DB_PASSWORD is required}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d payments"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    volumes:
+      - postgres-payments-data:/var/lib/postgresql/data
+      - ./payments/db/migrations/001_create_transactions.sql:/docker-entrypoint-initdb.d/001_create_transactions.sql:ro
+    networks:
+      - mobility-net
+
+  postgres-driver:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: driver
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${MOBILITY_DB_PASSWORD:?MOBILITY_DB_PASSWORD is required}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d driver"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    volumes:
+      - postgres-driver-data:/var/lib/postgresql/data
+    networks:
+      - mobility-net
+
+  postgres-rider:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: rider
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${MOBILITY_DB_PASSWORD:?MOBILITY_DB_PASSWORD is required}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d rider"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    volumes:
+      - postgres-rider-data:/var/lib/postgresql/data
+    networks:
+      - mobility-net
+
   payments:
     build:
       context: ./payments
     environment:
       PORT: "8081"
+      DATABASE_URL: postgres://postgres:${MOBILITY_DB_PASSWORD:?MOBILITY_DB_PASSWORD is required}@postgres-payments:5432/payments
     ports:
       - "8081:8081"
+      - "50051:50051"
+    depends_on:
+      postgres-payments:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8081/health || exit 1"]
       interval: 5s
@@ -21,10 +91,23 @@ services:
     environment:
       SERVER_PORT: "8080"
       PAYMENTS_URL: "http://payments:8081"
+      PAYMENTS_GRPC_URL: "payments:50051"
+      DATABASE_URL: "jdbc:postgresql://postgres-driver:5432/driver"
+      DATABASE_USER: "postgres"
+      DATABASE_PASSWORD: ${MOBILITY_DB_PASSWORD:?MOBILITY_DB_PASSWORD is required}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      AUTH_STUB: "true"
+      SMTP_HOST: "mailpit"
+      SMTP_PORT: "1025"
+      SMTP_FROM: "no-reply@mobility.local"
     ports:
       - "8080:8080"
     depends_on:
       payments:
+        condition: service_healthy
+      postgres-driver:
+        condition: service_healthy
+      mailpit:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health || exit 1"]
@@ -41,13 +124,24 @@ services:
     environment:
       PORT: "3000"
       PAYMENTS_URL: "http://payments:8081"
+      PAYMENTS_GRPC_URL: "payments:50051"
       DRIVER_URL: "http://driver:8080"
+      DATABASE_URL: postgres://postgres:${MOBILITY_DB_PASSWORD:?MOBILITY_DB_PASSWORD is required}@postgres-rider:5432/rider
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      AUTH_STUB: "true"
+      SMTP_HOST: "mailpit"
+      SMTP_PORT: "1025"
+      SMTP_FROM: "no-reply@mobility.local"
     ports:
       - "3000:3000"
     depends_on:
       payments:
         condition: service_healthy
       driver:
+        condition: service_healthy
+      postgres-rider:
+        condition: service_healthy
+      mailpit:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:3000/health || exit 1"]
@@ -61,3 +155,8 @@ services:
 networks:
   mobility-net:
     name: mobility-net
+
+volumes:
+  postgres-rider-data:
+  postgres-driver-data:
+  postgres-payments-data:

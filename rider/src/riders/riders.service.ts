@@ -1,10 +1,13 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { AuthenticatedUser } from '../auth/auth.types';
 import { DriverClient } from '../clients/driver.client';
 import { PaymentsClient } from '../clients/payments.client';
+import { NotificationsService } from '../notifications/notifications.service';
 import { CreateRiderDto } from './dto/create-rider.dto';
 import { DepositDto } from './dto/deposit.dto';
 import { PayDto } from './dto/pay.dto';
@@ -16,18 +19,30 @@ import {
 
 @Injectable()
 export class RidersService {
+  private readonly logger = new Logger(RidersService.name);
+
   constructor(
     private readonly ridersRepository: RidersRepository,
     private readonly paymentsClient: PaymentsClient,
     private readonly driverClient: DriverClient,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
-  register(dto: CreateRiderDto) {
-    return this.ridersRepository.create(dto);
+  async register(dto: CreateRiderDto, user: AuthenticatedUser) {
+    const rider = await this.ridersRepository.create(dto, user.appUserId);
+    this.notificationsService
+      .sendWelcomeRider({
+        email: rider.email,
+        name: rider.name,
+      })
+      .catch((error) => {
+        this.logger.warn(`Failed to send signup notification: ${String(error)}`);
+      });
+    return rider;
   }
 
-  findById(id: string) {
-    const rider = this.ridersRepository.findById(id);
+  async findById(id: string) {
+    const rider = await this.ridersRepository.findById(id);
     if (!rider) {
       throw new NotFoundException('Rider not found');
     }
@@ -36,7 +51,7 @@ export class RidersService {
   }
 
   async deposit(id: string, dto: DepositDto) {
-    this.findById(id);
+    const rider = await this.findById(id);
 
     const transaction = await this.paymentsClient.createTransaction({
       type: 'DEPOSIT',
@@ -45,7 +60,20 @@ export class RidersService {
       amount: dto.amount,
     });
 
-    const balance = this.ridersRepository.updateBalance(id, dto.amount);
+    const balance = await this.ridersRepository.updateBalance(id, dto.amount);
+
+    this.notificationsService
+      .sendDepositConfirmed({
+        email: rider.email,
+        name: rider.name,
+        amount: dto.amount,
+        balance,
+      })
+      .catch((error) => {
+        this.logger.warn(
+          `Failed to send deposit notification: ${String(error)}`,
+        );
+      });
 
     return {
       transactionId: transaction.transactionId,
@@ -54,7 +82,7 @@ export class RidersService {
   }
 
   async pay(id: string, dto: PayDto) {
-    const rider = this.findById(id);
+    const rider = await this.findById(id);
     await this.driverClient.verifyExists(dto.driverId);
 
     if (rider.balance < dto.amount) {
@@ -68,7 +96,7 @@ export class RidersService {
       amount: dto.amount,
     });
 
-    this.applyPaymentBalance(id, dto.amount);
+    await this.applyPaymentBalance(id, dto.amount);
 
     return {
       transactionId: transaction.transactionId,
@@ -77,9 +105,12 @@ export class RidersService {
     };
   }
 
-  private applyPaymentBalance(riderId: string, amount: number): number {
+  private async applyPaymentBalance(
+    riderId: string,
+    amount: number,
+  ): Promise<number> {
     try {
-      return this.ridersRepository.updateBalance(riderId, -amount);
+      return await this.ridersRepository.updateBalance(riderId, -amount);
     } catch (error) {
       if (error instanceof RiderNotFoundError) {
         throw new NotFoundException('Rider not found');

@@ -2,13 +2,17 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/jarmasp/mobility-inc/internal/store"
+	"github.com/jarmasp/mobility-inc/internal/transaction"
 )
 
 func setupMux() *http.ServeMux {
@@ -155,5 +159,105 @@ func TestGetTransactionByCodeNotFound(t *testing.T) {
 	}
 	if body["error"] != "Transaction not found" {
 		t.Fatalf("unexpected error message: %q", body["error"])
+	}
+}
+
+type replayStore struct {
+	mu               sync.Mutex
+	getByKeyCalls    int
+	existingByKey    map[string]transaction.Transaction
+	nextSaveConflict bool
+	lastSavedByKey   map[string]transaction.Transaction
+}
+
+func newReplayStore() *replayStore {
+	return &replayStore{
+		existingByKey:  make(map[string]transaction.Transaction),
+		lastSavedByKey: make(map[string]transaction.Transaction),
+	}
+}
+
+func (s *replayStore) Save(_ context.Context, tx transaction.Transaction) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.nextSaveConflict {
+		s.nextSaveConflict = false
+		return &store.ConflictError{
+			Field: store.ConflictFieldIdempotencyKey,
+			Value: tx.IdempotencyKey,
+		}
+	}
+
+	if tx.IdempotencyKey != "" {
+		s.lastSavedByKey[tx.IdempotencyKey] = tx
+	}
+	return nil
+}
+
+func (s *replayStore) GetByID(_ context.Context, _ string) (transaction.Transaction, bool, error) {
+	return transaction.Transaction{}, false, nil
+}
+
+func (s *replayStore) GetByCode(_ context.Context, _ string) (transaction.Transaction, bool, error) {
+	return transaction.Transaction{}, false, nil
+}
+
+func (s *replayStore) GetByIdempotencyKey(_ context.Context, key string) (transaction.Transaction, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.getByKeyCalls++
+	if s.getByKeyCalls == 1 {
+		return transaction.Transaction{}, false, nil
+	}
+	if tx, ok := s.existingByKey[key]; ok {
+		return tx, true, nil
+	}
+	return transaction.Transaction{}, false, nil
+}
+
+func TestIdempotencyConflictReplayReturnsOriginal201(t *testing.T) {
+	t.Parallel()
+
+	s := newReplayStore()
+	s.nextSaveConflict = true
+	existingCode := "ZXCV1234"
+	existingReceiver := "22222222-2222-4222-8222-222222222222"
+	existing := transaction.Transaction{
+		ID:             "11111111-1111-4111-8111-111111111111",
+		Type:           transaction.TypeTransfer,
+		Status:         transaction.StatusCompleted,
+		Code:           &existingCode,
+		SenderID:       "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+		ReceiverID:     &existingReceiver,
+		Amount:         31.5,
+		CreatedAt:      time.Now().UTC(),
+		IdempotencyKey: "idem-replay",
+	}
+	s.existingByKey[existing.IdempotencyKey] = existing
+
+	h := NewTransactionsHandler(s)
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /transactions", h.CreateTransaction)
+
+	req := httptest.NewRequest(http.MethodPost, "/transactions", bytes.NewBufferString(`{"type":"TRANSFER","senderId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","receiverId":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","amount":5}`))
+	req.Header.Set("Idempotency-Key", existing.IdempotencyKey)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("unexpected status: got %d want %d", rec.Code, http.StatusCreated)
+	}
+
+	var got transaction.Transaction
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if got.ID != existing.ID {
+		t.Fatalf("expected replayed transaction id %q, got %q", existing.ID, got.ID)
+	}
+	if got.Code == nil || *got.Code != existingCode {
+		t.Fatalf("expected replayed code %q, got %#v", existingCode, got.Code)
 	}
 }

@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package payments.v1;
+
+option go_package = "github.com/jarmasp/mobility-inc/internal/gen/payments/v1;paymentsv1";
+
+message CreateTransactionRequest {
+  string type = 1;
+  string sender_id = 2;
+  string receiver_id = 3;
+  double amount = 4;
+  string idempotency_key = 5;
+}
+
+message Transaction {
+  string transaction_id = 1;
+  string type = 2;
+  string status = 3;
+  string code = 4;
+  string sender_id = 5;
+  string receiver_id = 6;
+  double amount = 7;
+  string created_at = 8;
+}
+
+message CreateTransactionResponse {
+  Transaction transaction = 1;
+}
+
+message GetTransactionByCodeRequest {
+  string code = 1;
+}
+
+message GetTransactionByCodeResponse {
+  Transaction transaction = 1;
+}
+
+service PaymentsService {
+  rpc CreateTransaction(CreateTransactionRequest) returns (CreateTransactionResponse);
+  rpc GetTransactionByCode(GetTransactionByCodeRequest) returns (GetTransactionByCodeResponse);
+}

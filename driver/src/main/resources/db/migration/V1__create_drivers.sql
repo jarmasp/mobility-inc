@@ -1,0 +1,7 @@
+CREATE TABLE drivers (
+    id VARCHAR(64) PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL,
+    balance NUMERIC(19, 2) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL
+);

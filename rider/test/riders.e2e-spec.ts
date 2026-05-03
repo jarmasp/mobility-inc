@@ -8,7 +8,7 @@ import { ErrorEnvelopeFilter } from '../src/common/filters/error-envelope.filter
 
 describe('Riders API (e2e)', () => {
   let app: INestApplication;
-  const userId = 'b43aa145-d9e6-4596-8cd1-2df070ea7ef1';
+  let accessToken = '';
 
   const paymentsClientStub = {
     createTransaction: jest.fn().mockImplementation((payload) => {
@@ -43,6 +43,9 @@ describe('Riders API (e2e)', () => {
   };
 
   beforeEach(async () => {
+    process.env.AUTH_STUB = 'true';
+    process.env.JWT_SECRET = 'test-secret';
+
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     })
@@ -61,16 +64,29 @@ describe('Riders API (e2e)', () => {
     );
     app.useGlobalFilters(new ErrorEnvelopeFilter());
     await app.init();
+
+    const tokenResponse = await request(app.getHttpServer())
+      .post('/auth/dev/token')
+      .send({
+        subject: 'e2e-rider',
+        email: 'ava@example.com',
+        name: 'Ava',
+      })
+      .expect(200);
+
+    accessToken = tokenResponse.body.accessToken;
   });
 
   afterEach(async () => {
+    delete process.env.AUTH_STUB;
+    delete process.env.JWT_SECRET;
     await app.close();
   });
 
   it('supports register, get, deposit, and pay happy path', async () => {
     const createResponse = await request(app.getHttpServer())
       .post('/riders')
-      .set('X-User-Id', userId)
+      .set('Authorization', `Bearer ${accessToken}`)
       .send({
         name: 'Ava',
         email: 'ava@example.com',
@@ -81,12 +97,12 @@ describe('Riders API (e2e)', () => {
 
     await request(app.getHttpServer())
       .get(`/riders/${createResponse.body.id}`)
-      .set('X-User-Id', userId)
+      .set('Authorization', `Bearer ${accessToken}`)
       .expect(200);
 
     await request(app.getHttpServer())
       .post(`/riders/${createResponse.body.id}/deposit`)
-      .set('X-User-Id', userId)
+      .set('Authorization', `Bearer ${accessToken}`)
       .send({ amount: 50 })
       .expect(200)
       .expect({
@@ -96,7 +112,7 @@ describe('Riders API (e2e)', () => {
 
     await request(app.getHttpServer())
       .post(`/riders/${createResponse.body.id}/pay`)
-      .set('X-User-Id', userId)
+      .set('Authorization', `Bearer ${accessToken}`)
       .send({
         driverId: 'bc489953-abf6-47f8-9c96-97fd4e5e96cf',
         amount: 25,
@@ -107,5 +123,15 @@ describe('Riders API (e2e)', () => {
         code: 'AAAA0000',
         amount: 25,
       });
+  });
+
+  it('rejects rider endpoints without bearer token', async () => {
+    await request(app.getHttpServer())
+      .post('/riders')
+      .send({
+        name: 'No Auth',
+        email: 'no-auth@example.com',
+      })
+      .expect(401);
   });
 });

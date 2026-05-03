@@ -6,13 +6,13 @@ import com.example.demo.driver.dto.CreateDriverRequest;
 import com.example.demo.driver.exception.ForbiddenException;
 import com.example.demo.driver.exception.InsufficientFundsException;
 import com.example.demo.driver.exception.NotFoundException;
+import com.example.demo.notifications.NotificationService;
+import org.springframework.dao.DataIntegrityViolationException;
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class DriverService {
@@ -20,16 +20,27 @@ public class DriverService {
     private static final BigDecimal INITIAL_BALANCE = BigDecimal.valueOf(100);
 
     private final DriverRepository driverRepository;
+    private final ClaimedCodeRepository claimedCodeRepository;
     private final PaymentsClient paymentsClient;
-    private final Set<String> claimedCodes = ConcurrentHashMap.newKeySet();
-    private final Map<String, TransactionDto> claimedTransactions = new ConcurrentHashMap<>();
+    private final NotificationService notificationService;
 
-    public DriverService(DriverRepository driverRepository, PaymentsClient paymentsClient) {
+    public DriverService(
+            DriverRepository driverRepository,
+            ClaimedCodeRepository claimedCodeRepository,
+            PaymentsClient paymentsClient,
+            NotificationService notificationService
+    ) {
         this.driverRepository = driverRepository;
+        this.claimedCodeRepository = claimedCodeRepository;
         this.paymentsClient = paymentsClient;
+        this.notificationService = notificationService;
     }
 
-    public Driver register(CreateDriverRequest request) {
+    public Driver register(String appUserId, CreateDriverRequest request) {
+        Driver existing = driverRepository.findByAppUserId(appUserId).orElse(null);
+        if (existing != null) {
+            return existing;
+        }
         Driver driver = new Driver(
                 UUID.randomUUID().toString(),
                 request.name(),
@@ -37,7 +48,9 @@ public class DriverService {
                 INITIAL_BALANCE,
                 Instant.now()
         );
-        return driverRepository.save(driver);
+        Driver saved = driverRepository.save(driver, appUserId);
+        notificationService.sendWelcomeDriver(saved);
+        return saved;
     }
 
     public Driver findById(String id) {
@@ -68,12 +81,11 @@ public class DriverService {
         return new WithdrawResult(transaction.transactionId(), updated.balance());
     }
 
+    @Transactional
     public TransactionDto verifyTransactionCode(String driverId, String code) {
         findById(driverId);
-        TransactionDto alreadyClaimed = claimedTransactions.get(code);
-        if (alreadyClaimed != null) {
-            return alreadyClaimed;
-        }
+        TransactionDto alreadyClaimed = findClaimedTransaction(driverId, code);
+        if (alreadyClaimed != null) return alreadyClaimed;
 
         TransactionDto transaction = paymentsClient.getTransactionByCode(code)
                 .orElseThrow(() -> new NotFoundException("Transaction not found"));
@@ -82,22 +94,34 @@ public class DriverService {
             throw new ForbiddenException("Code does not belong to this driver");
         }
 
-        synchronized (this) {
-            TransactionDto claimed = claimedTransactions.get(code);
+        try {
+            claimedCodeRepository.saveAndFlush(ClaimedCodeEntity.fromTransaction(driverId, transaction));
+            Driver creditedDriver = driverRepository.updateBalance(driverId, transaction.amount())
+                    .orElseThrow(() -> new NotFoundException("Driver not found"));
+            notificationService.sendPaymentReceived(creditedDriver, transaction);
+            return transaction;
+        } catch (DataIntegrityViolationException exception) {
+            TransactionDto claimed = findClaimedTransaction(driverId, code);
             if (claimed != null) {
                 return claimed;
             }
-
-            driverRepository.updateBalance(driverId, transaction.amount())
-                    .orElseThrow(() -> new NotFoundException("Driver not found"));
-            claimedCodes.add(code);
-            claimedTransactions.put(code, transaction);
-            return transaction;
+            throw exception;
         }
     }
 
     public boolean isClaimed(String code) {
-        return claimedCodes.contains(code);
+        return claimedCodeRepository.existsById(code);
+    }
+
+    private TransactionDto findClaimedTransaction(String driverId, String code) {
+        return claimedCodeRepository.findById(code)
+                .map(claimed -> {
+                    if (!driverId.equals(claimed.driverId())) {
+                        throw new ForbiddenException("Code does not belong to this driver");
+                    }
+                    return claimed.toTransactionDto();
+                })
+                .orElse(null);
     }
 
     public record WithdrawResult(
